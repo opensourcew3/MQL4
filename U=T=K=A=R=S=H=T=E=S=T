@@ -1,0 +1,95 @@
+// Input Parameters
+input int EmaShort = 10;       // Short-term EMA period (e.g., EMA 10)
+input int EmaMedium = 20;      // Medium-term EMA period (e.g., EMA 20)
+input int EmaLong = 59;        // Long-term EMA period (e.g., EMA 59)
+input double LotSize = 0.01;   // Trade Lot Size
+input double Slippage = 3;     // Slippage in points
+input double StopLoss = 50;    // Stop loss in pips
+input double TakeProfit = 50;  // Take profit in pips
+
+// Function to check trade conditions
+bool CheckConditions() {
+    double emaShort = iMA(NULL, 0, EmaShort, 0, MODE_EMA, PRICE_CLOSE, 0);
+    double emaMedium = iMA(NULL, 0, EmaMedium, 0, MODE_EMA, PRICE_CLOSE, 0);
+    double emaLong = iMA(NULL, 0, EmaLong, 0, MODE_EMA, PRICE_CLOSE, 0);
+    
+    // Condition 1: EMA Short and Medium are above EMA Long
+    if (!(emaShort > emaLong && emaMedium > emaLong)) {
+        Print("Condition 1 failed: EMA Short and Medium are not above EMA Long");
+        return false;
+    }
+    
+    // Condition 2: Candle Open and Low are not touching EMA Short
+    if (Open[0] <= emaShort || Low[0] <= emaShort) {
+        Print("Condition 2 failed: Candle Open or Low is touching EMA Short");
+        return false;
+    }
+    
+    // Condition 3: Candle range is greater than 200 points
+    if ((High[0] - Low[0]) < 200 * Point) {
+        Print("Condition 3 failed: Candle range is less than 200 points");
+        return false;
+    }
+
+    return true;
+}
+
+// Function to send an alert message
+void SendAlert(string message) {
+    Alert(message);    // Displays a popup alert in the trading terminal
+    Print(message);    // Prints the alert message in the Experts tab
+}
+
+// Function to execute a sell trade
+void ExecuteSellTrade() {
+    double stopLossPrice = Ask + StopLoss * Point;
+    double takeProfitPrice = Ask - TakeProfit * Point;
+
+    // Open Sell Order
+    int ticket = OrderSend(Symbol(), OP_SELL, LotSize, Ask, Slippage, stopLossPrice, takeProfitPrice, "Sell Order", 0, 0, Red);
+    
+    // Check for errors in order placement
+    if (ticket < 0) {
+        Print("Error placing sell order: ", GetLastError());
+    } else {
+        Print("Sell order placed successfully. Ticket: ", ticket);
+    }
+}
+
+// Function to execute a buy trade (optional, for demonstration purposes)
+void ExecuteBuyTrade() {
+    double stopLossPrice = Bid - StopLoss * Point;
+    double takeProfitPrice = Bid + TakeProfit * Point;
+
+    // Open Buy Order
+    int ticket = OrderSend(Symbol(), OP_BUY, LotSize, Bid, Slippage, stopLossPrice, takeProfitPrice, "Buy Order", 0, 0, Blue);
+    
+    // Check for errors in order placement
+    if (ticket < 0) {
+        Print("Error placing buy order: ", GetLastError());
+    } else {
+        Print("Buy order placed successfully. Ticket: ", ticket);
+    }
+}
+
+// Main trading logic (called on each tick)
+void OnTick() {
+    // Check the conditions for trade execution
+    if (CheckConditions()) {
+        // If conditions met, execute the sell trade
+        ExecuteSellTrade();
+    }
+}
+
+// Initialization function
+int OnInit() {
+    // Initialization (e.g., set up indicators, etc.)
+    Print("Expert Advisor Initialized");
+    return INIT_SUCCEEDED;
+}
+
+// Deinitialization function
+void OnDeinit(const int reason) {
+    // Cleanup when the EA is removed
+    Print("Expert Advisor Deinitialized");
+}
