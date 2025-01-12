@@ -1,0 +1,132 @@
+//+------------------------------------------------------------------+
+//|                                                         LondonNY EA |
+//|                                    Created by: ChatGPT (Customized) |
+//+------------------------------------------------------------------+
+#property strict
+
+// Input Parameters
+input int BollingerPeriod = 20;            // Period for Bollinger Bands
+input double BollingerDeviation = 2.0;     // Deviation for Bollinger Bands
+input double PointGap = 50;                // Gap between pending orders (points)
+input double BrokeragePerLot = 0.07;       // Brokerage per 0.01 lot
+input double TakeProfit = 10;              // Target profit in USD
+
+// Lot Sizes Array
+double LotSizes[10] = {0.1, 0.02, 0.03, 0.05, 0.09, 0.015, 0.01, 0.15, 0.01, 0.15};
+
+// Time Constants for London and New York Sessions
+datetime LondonOpen = 8 * 3600;            // 8:00 AM server time
+datetime LondonClose = 17 * 3600;          // 5:00 PM server time
+datetime NewYorkOpen = 13 * 3600;          // 1:00 PM server time
+datetime NewYorkClose = 22 * 3600;         // 10:00 PM server time
+
+// Helper Function to Check if Current Time is in Session
+bool InSession() {
+   datetime currentTime = TimeCurrent() % 86400; // Current time of day in seconds
+   return (currentTime >= LondonOpen && currentTime <= LondonClose) || 
+          (currentTime >= NewYorkOpen && currentTime <= NewYorkClose);
+}
+
+//+------------------------------------------------------------------+
+//| Expert Initialization Function                                   |
+//+------------------------------------------------------------------+
+int OnInit() {
+   Print("EA Initialized: London and New York Session Trading EA");
+   return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Expert Deinitialization Function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason) {
+   Print("EA Deinitialized");
+}
+
+//+------------------------------------------------------------------+
+//| Expert Tick Function                                             |
+//+------------------------------------------------------------------+
+void OnTick() {
+   // Ensure we are in the specified trading sessions
+   if (!InSession()) return;
+
+   // Calculate Bollinger Bands
+   double upperBand = iBands(NULL, 0, BollingerPeriod, BollingerDeviation, 0, PRICE_CLOSE, MODE_UPPER, 0);
+   double lowerBand = iBands(NULL, 0, BollingerPeriod, BollingerDeviation, 0, PRICE_CLOSE, MODE_LOWER, 0);
+
+   // Place Buy Orders if not already placed
+   ManagePendingOrders(OP_BUY, lowerBand, PointGap);
+
+   // Place Sell Orders if not already placed
+   ManagePendingOrders(OP_SELL, upperBand, PointGap);
+
+   // Manage Open Buy Trades
+   ManageOpenTrades(OP_BUY);
+
+   // Manage Open Sell Trades
+   ManageOpenTrades(OP_SELL);
+}
+
+//+------------------------------------------------------------------+
+//| Function to Manage Pending Orders                                |
+//+------------------------------------------------------------------+
+void ManagePendingOrders(int orderType, double bandLevel, double gap) {
+   int totalOrders = 0;
+   for (int i = OrdersTotal() - 1; i >= 0; i--) {
+      if (OrderSelect(i, SELECT_BY_POS) && OrderType() == orderType) {
+         totalOrders++;
+      }
+   }
+
+   // Place new pending orders
+   if (totalOrders < 10) {
+      for (int j = totalOrders; j < 10; j++) {
+         // Calculate price levels
+         double price;
+         if (orderType == OP_BUY) {
+            price = bandLevel - (j + 1) * gap * Point; // Lower band - move downward
+         } else if (orderType == OP_SELL) {
+            price = bandLevel + (j + 1) * gap * Point; // Upper band - move upward
+         }
+
+         // Fetch corresponding lot size
+         double lotSize = LotSizes[j];
+
+         // Place the pending order
+         int ticket = OrderSend(Symbol(), orderType + 2, lotSize, price, 3, 0, 0, "", 0, 0, CLR_NONE);
+         if (ticket < 0) {
+            Print("Failed to place order: ", GetLastError());
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Function to Manage Open Trades                                   |
+//+------------------------------------------------------------------+
+void ManageOpenTrades(int tradeType) {
+   double totalProfit = 0;
+   double totalLots = 0;
+
+   for (int i = OrdersTotal() - 1; i >= 0; i--) {
+      if (OrderSelect(i, SELECT_BY_POS) && OrderType() == tradeType) {
+         totalProfit += OrderProfit() + OrderSwap() + OrderCommission();
+         totalLots += OrderLots();
+      }
+   }
+
+   // Calculate total brokerage
+   double brokerage = totalLots * BrokeragePerLot * 100;
+
+   // Check for profit condition
+   if (totalProfit - brokerage >= TakeProfit) {
+      for (int j = OrdersTotal() - 1; j >= 0; j--) {
+         if (OrderSelect(j, SELECT_BY_POS) && OrderType() == tradeType) {
+            if (!OrderClose(OrderTicket(), OrderLots(), Bid, 3)) {
+               Print("Failed to close order: ", GetLastError());
+            }
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
