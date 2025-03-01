@@ -1,0 +1,169 @@
+//+------------------------------------------------------------------+
+//|                 Hotkey EA for MT5 (NumPad Only)                 |
+//|       Press assigned NumPad keys to perform trading tasks       |
+//+------------------------------------------------------------------+
+#include <Trade\Trade.mqh>
+
+CTrade trade;
+
+// Default lot size settings
+input double InitialVolume = 0.01;  // ✅ Starting lot size set to 0.01
+input double VolumeStep = 0.01;    // ✅ Step size for increasing/decreasing volume
+
+double LotSize = InitialVolume;    // ✅ Current lot size
+
+// Define NumPad hotkeys (adjustable)
+#define KEY_BUY 97       // NumPad 1 - Market Buy
+#define KEY_SELL 98      // NumPad 2 - Market Sell
+#define KEY_CLOSE_ALL 99 // NumPad 3 - Close All Positions
+#define KEY_CLOSE_BUY 100 // NumPad 4 - Close Buy Positions
+#define KEY_CLOSE_SELL 101 // NumPad 5 - Close Sell Positions
+#define KEY_REVERSE_BUY 103  // NumPad 7 - Reverse Buy
+#define KEY_REVERSE_SELL 104 // NumPad 8 - Reverse Sell
+#define KEY_INCREASE_LOT 38  // ✅ Up Arrow - Increase Volume
+#define KEY_DECREASE_LOT 40  // ✅ Down Arrow - Decrease Volume
+
+//+------------------------------------------------------------------+
+//| Event Handler for Key Presses                                   |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+   if (id == CHARTEVENT_KEYDOWN) // Detect key press
+   {
+      int key = (int)lparam;
+
+      switch (key)
+      {
+         case KEY_BUY:  // Market Buy
+            trade.Buy(LotSize, Symbol(), 0, 0, 0, "NumPad Buy");
+            Print("Market Buy Order Placed!");
+            break;
+
+         case KEY_SELL:  // Market Sell
+            trade.Sell(LotSize, Symbol(), 0, 0, 0, "NumPad Sell");
+            Print("Market Sell Order Placed!");
+            break;
+
+         case KEY_REVERSE_BUY:  // Reverse Buy (Close all Buy & Sell double size)
+            ReverseBuy();
+            break;
+
+         case KEY_REVERSE_SELL: // Reverse Sell (Close all Sell & Buy double size)
+            ReverseSell();
+            break;
+
+         case KEY_CLOSE_BUY:  // Close all Buy positions
+            ClosePositions(POSITION_TYPE_BUY);
+            break;
+
+         case KEY_CLOSE_SELL: // Close all Sell positions
+            ClosePositions(POSITION_TYPE_SELL);
+            break;
+
+         case KEY_CLOSE_ALL:  // Close all Buy & Sell positions
+            CloseAllPositions();
+            break;
+
+         case KEY_INCREASE_LOT:  // ✅ Increase lot size using Up Arrow
+            LotSize += VolumeStep;
+            Print("Lot Size Increased: ", LotSize);
+            break;
+
+         case KEY_DECREASE_LOT:  // ✅ Decrease lot size using Down Arrow
+            LotSize = MathMax(InitialVolume, LotSize - VolumeStep); // Prevent going below 0.01
+            Print("Lot Size Decreased: ", LotSize);
+            break;
+
+         default:
+            Print("Unused Key Pressed: ", key);
+            break;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Function to Reverse Buy Position (Close all Buys & Sell Double) |
+//+------------------------------------------------------------------+
+void ReverseBuy()
+{
+   double totalBuyLots = 0;
+
+   for (int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if (PositionGetSymbol(i) == Symbol() && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+      {
+         totalBuyLots += PositionGetDouble(POSITION_VOLUME);
+         trade.PositionClose(PositionGetTicket(i));
+      }
+   }
+
+   if (totalBuyLots > 0)
+   {
+      trade.Sell(totalBuyLots * 2, Symbol(), 0, 0, 0, "Reverse Sell");
+      Print("Reversed Buy -> Sell ", totalBuyLots * 2, " lots");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Function to Reverse Sell Position (Close all Sells & Buy Double)|
+//+------------------------------------------------------------------+
+void ReverseSell()
+{
+   double totalSellLots = 0;
+
+   for (int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if (PositionGetSymbol(i) == Symbol() && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+      {
+         totalSellLots += PositionGetDouble(POSITION_VOLUME);
+         trade.PositionClose(PositionGetTicket(i));
+      }
+   }
+
+   if (totalSellLots > 0)
+   {
+      trade.Buy(totalSellLots * 2, Symbol(), 0, 0, 0, "Reverse Buy");
+      Print("Reversed Sell -> Buy ", totalSellLots * 2, " lots");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Function to Close Specific Type of Positions                    |
+//+------------------------------------------------------------------+
+void ClosePositions(int positionType)
+{
+   for (int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if (PositionGetSymbol(i) == Symbol() && PositionGetInteger(POSITION_TYPE) == positionType)
+      {
+         trade.PositionClose(PositionGetTicket(i));
+      }
+   }
+   Print("Closed all ", (positionType == POSITION_TYPE_BUY) ? "Buy" : "Sell", " positions.");
+}
+
+//+------------------------------------------------------------------+
+//| Function to Close All Open Trades Within 3 Seconds              |
+//+------------------------------------------------------------------+
+void CloseAllPositions()
+{
+   ulong startTime = GetTickCount64(); // Record the start time
+   
+   while (GetTickCount64() - startTime < 3000) // Run for 3 seconds
+   {
+      for (int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         if (!trade.PositionClose(PositionGetTicket(i)))
+         {
+            Print("Failed to close position: ", PositionGetTicket(i));
+         }
+      }
+      if (PositionsTotal() == 0) // Stop if all positions are closed
+      {
+         break;
+      }
+      Sleep(100); // Prevent excessive CPU usage
+   }
+   
+   Print("All Positions Closed or 3 seconds elapsed!");
+}
