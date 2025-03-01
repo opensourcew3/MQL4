@@ -1,0 +1,115 @@
+#include <Trade\Trade.mqh>
+CTrade trade;
+
+#define X 10
+#define Y 10
+
+int xPos = X, yPos = Y;
+
+void OnInit()
+{
+   CreateDashboard();
+}
+
+void OnTick()
+{
+   UpdateDashboard();
+}
+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+   if (id == CHARTEVENT_OBJECT_DRAG && sparam == "Dashboard_BG")
+   {
+      xPos = (int)ObjectGetInteger(ChartID(), sparam, OBJPROP_XDISTANCE);
+      yPos = (int)ObjectGetInteger(ChartID(), sparam, OBJPROP_YDISTANCE);
+      UpdateDashboard();
+   }
+}
+
+void CreateDashboard()
+{
+   CreateRectangle("Dashboard_BG", xPos, yPos, 400, 150, clrSilver);
+
+   CreateLabel("BUY_TITLE", "BUY", xPos + 10, yPos + 10, clrBlue, 14);
+   CreateLabel("BUY LOT", "LOT: ", xPos + 10, yPos + 35, clrBlue, 12);
+   CreateLabel("BUY PROFIT", "PROFIT: ", xPos + 10, yPos + 55, clrBlue, 12);
+
+   CreateLabel("SELL_TITLE", "SELL", xPos + 200, yPos + 10, clrRed, 14);
+   CreateLabel("SELL LOT", "LOT: ", xPos + 200, yPos + 35, clrRed, 12);
+   CreateLabel("SELL PROFIT", "PROFIT: ", xPos + 200, yPos + 55, clrRed, 12);
+
+   // Total Profit in Center (Small Size)
+   CreateLabel("TOTAL PROFIT", "TOTAL PROFIT 💪: $0.00", xPos + 110, yPos + 110, clrYellow, 15);
+}
+
+void CreateRectangle(string name, int x, int y, int width, int height, color bg)
+{
+   if (ObjectFind(ChartID(), name) < 0)
+   {
+      ObjectCreate(ChartID(), name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(ChartID(), name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(ChartID(), name, OBJPROP_XDISTANCE, x);
+      ObjectSetInteger(ChartID(), name, OBJPROP_YDISTANCE, y);
+      ObjectSetInteger(ChartID(), name, OBJPROP_XSIZE, width);
+      ObjectSetInteger(ChartID(), name, OBJPROP_YSIZE, height);
+      ObjectSetInteger(ChartID(), name, OBJPROP_COLOR, bg);
+      ObjectSetInteger(ChartID(), name, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(ChartID(), name, OBJPROP_SELECTABLE, true);
+      ObjectSetInteger(ChartID(), name, OBJPROP_SELECTED, true);
+   }
+}
+
+void CreateLabel(string name, string text, int x, int y, color col, int fontsize)
+{
+   if (ObjectFind(ChartID(), name) < 0)
+   {
+      ObjectCreate(ChartID(), name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetString(ChartID(), name, OBJPROP_TEXT, text);
+      ObjectSetInteger(ChartID(), name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(ChartID(), name, OBJPROP_XDISTANCE, x);
+      ObjectSetInteger(ChartID(), name, OBJPROP_YDISTANCE, y);
+      ObjectSetInteger(ChartID(), name, OBJPROP_FONTSIZE, fontsize);
+      ObjectSetInteger(ChartID(), name, OBJPROP_COLOR, col);
+   }
+}
+
+void UpdateDashboard()
+{
+   double BuyLots = 0, BuyProfit = 0;
+   double SellLots = 0, SellProfit = 0;
+
+   for (int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if (PositionSelectByTicket(ticket))
+      {
+         double profit = PositionGetDouble(POSITION_PROFIT);
+         double lots = PositionGetDouble(POSITION_VOLUME);
+         int type = PositionGetInteger(POSITION_TYPE);
+
+         if (type == ORDER_TYPE_BUY)
+         {
+            BuyLots += lots;
+            BuyProfit += profit;
+         }
+         if (type == ORDER_TYPE_SELL)
+         {
+            SellLots += lots;
+            SellProfit += profit;
+         }
+      }
+   }
+
+   double TotalProfit = BuyProfit + SellProfit;
+
+   ObjectSetString(ChartID(), "BUY LOT", OBJPROP_TEXT, "LOT: " + DoubleToString(BuyLots, 2));
+   ObjectSetString(ChartID(), "BUY PROFIT", OBJPROP_TEXT, "PROFIT: $" + DoubleToString(BuyProfit, 2));
+   ObjectSetInteger(ChartID(), "BUY PROFIT", OBJPROP_COLOR, (BuyProfit >= 0) ? clrBlue : clrRed);
+
+   ObjectSetString(ChartID(), "SELL LOT", OBJPROP_TEXT, "LOT: " + DoubleToString(SellLots, 2));
+   ObjectSetString(ChartID(), "SELL PROFIT", OBJPROP_TEXT, "PROFIT: $" + DoubleToString(SellProfit, 2));
+   ObjectSetInteger(ChartID(), "SELL PROFIT", OBJPROP_COLOR, (SellProfit >= 0) ? clrBlue : clrRed);
+
+   ObjectSetString(ChartID(), "TOTAL PROFIT", OBJPROP_TEXT, "TOTAL PROFIT 💪: $" + DoubleToString(TotalProfit, 2));
+   ObjectSetInteger(ChartID(), "TOTAL PROFIT", OBJPROP_COLOR, (TotalProfit >= 0) ? clrGreen : clrRed);
+}
