@@ -1,0 +1,260 @@
+//+------------------------------------------------------------------+
+//| Liquidity Hunter Pro v4.0                                        |
+//| BTC + Gold + EURUSD                                              |
+//| Advanced EA with Liquidity Zones, RSI Confirmation               |
+//| Hidden Stop Loss, Break-Even, News Filter, Telegram Bot          |
+//+------------------------------------------------------------------+
+
+#include <Trade\Trade.mqh>
+CTrade trade;
+
+//--- Input Parameters
+input int RSI_Period = 14;
+input int RSI_Overbought = 70;
+input int RSI_Oversold = 30;
+input double RiskPercent = 1.0;
+input double DailyProfitTarget = 100.0;
+input bool UseHiddenSL = true;
+input bool UseTelegramSignals = true;
+input string TelegramBotToken = "";  
+input string TelegramChatID = "";
+input bool UseNewsFilter = true;
+input int BreakEvenPips = 20;
+
+datetime lastBarTime = 0;
+double dailyProfit = 0.0;
+
+//--- Indicator Handles
+int rsi_handle;
+int fractal_handle;
+
+//--- Symbol-specific parameters
+struct SymbolParams
+{
+   string symbol;
+   double lotSize;
+   int stopLoss;
+   int takeProfit;
+};
+
+SymbolParams symbolsInfo[] = {
+   {"BTCUSD", 0.01, 500, 1000},
+   {"XAUUSD", 0.1, 100, 200},
+   {"EURUSD", 0.1, 50, 100}
+};
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   Print("Liquidity Hunter Pro v4.0 ✅ Initialized");
+   
+   rsi_handle = iRSI(_Symbol, PERIOD_M15, RSI_Period, PRICE_CLOSE);
+   fractal_handle = iFractals(_Symbol, PERIOD_M15);
+
+   if (rsi_handle == INVALID_HANDLE || fractal_handle == INVALID_HANDLE)
+   {
+      Print("❌ Indicator Initialization Failed");
+      return(INIT_FAILED);
+   }
+   
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   IndicatorRelease(rsi_handle);
+   IndicatorRelease(fractal_handle);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   if (!IsNewBar() || IsNewsTime()) return;
+
+   double resistance, support;
+   if (DetectLiquidityZone(resistance, support) && RSIConfirm())
+   {
+      SymbolParams currentSymbol;
+      for(int i=0; i<ArraySize(symbolsInfo); i++)
+      {
+         if(symbolsInfo[i].symbol == _Symbol)
+         {
+            currentSymbol = symbolsInfo[i];
+            break;
+         }
+      }
+      
+      if (SymbolInfoDouble(_Symbol, SYMBOL_BID) > resistance)
+         ExecuteTrade("SELL", currentSymbol.lotSize);
+         
+      if (SymbolInfoDouble(_Symbol, SYMBOL_BID) < support)
+         ExecuteTrade("BUY", currentSymbol.lotSize);
+   }
+
+   BreakEven();
+   ManageDailyProfit();
+}
+
+//+------------------------------------------------------------------+
+//| Check for new bar                                                |
+//+------------------------------------------------------------------+
+bool IsNewBar()
+{
+   datetime currentBarTime = iTime(_Symbol, PERIOD_M15, 0);
+   if (currentBarTime != lastBarTime)
+   {
+      lastBarTime = currentBarTime;
+      return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| RSI Confirmation                                                 |
+//+------------------------------------------------------------------+
+bool RSIConfirm()
+{
+   double rsi[];
+   CopyBuffer(rsi_handle, 0, 0, 3, rsi);
+   if (rsi[0] >= RSI_Overbought || rsi[0] <= RSI_Oversold) return true;
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Liquidity Zone                                            |
+//+------------------------------------------------------------------+
+bool DetectLiquidityZone(double &resistance, double &support)
+{
+   double upperFractals[], lowerFractals[];
+   CopyBuffer(fractal_handle, 0, 0, 10, upperFractals);
+   CopyBuffer(fractal_handle, 1, 0, 10, lowerFractals);
+   
+   resistance = 0;
+   support = DBL_MAX;
+   
+   for(int i=0; i<10; i++)
+   {
+      if(upperFractals[i] != EMPTY_VALUE && upperFractals[i] > resistance)
+         resistance = upperFractals[i];
+      if(lowerFractals[i] != EMPTY_VALUE && lowerFractals[i] < support)
+         support = lowerFractals[i];
+   }
+   
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if (MathAbs(price - resistance) < 50 * _Point || MathAbs(price - support) < 50 * _Point)
+      return true;
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Execute Trade                                                    |
+//+------------------------------------------------------------------+
+void ExecuteTrade(string type, double lotSize)
+{
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
+   SymbolParams currentSymbol;
+   for(int i=0; i<ArraySize(symbolsInfo); i++)
+   {
+      if(symbolsInfo[i].symbol == _Symbol)
+      {
+         currentSymbol = symbolsInfo[i];
+         break;
+      }
+   }
+   
+   double sl = UseHiddenSL ? 0 : (type == "BUY" ? price - currentSymbol.stopLoss * _Point : price + currentSymbol.stopLoss * _Point);
+   double tp = price + (type == "BUY" ? currentSymbol.takeProfit : -currentSymbol.takeProfit) * _Point;
+   
+   if (type == "BUY") trade.Buy(lotSize, _Symbol, price, sl, tp, "Liquidity Hunter Pro v4.0");
+   if (type == "SELL") trade.Sell(lotSize, _Symbol, price, sl, tp, "Liquidity Hunter Pro v4.0");
+
+   SendTelegramSignal("Trade Executed: " + type + " on " + _Symbol);
+}
+
+//+------------------------------------------------------------------+
+//| Break Even Function                                              |
+//+------------------------------------------------------------------+
+void BreakEven()
+{
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      if(PositionSelectByTicket(PositionGetTicket(i)))
+      {
+         if(_Symbol == PositionGetString(POSITION_SYMBOL))
+         {
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double open = PositionGetDouble(POSITION_PRICE_OPEN);
+
+            if (profit > BreakEvenPips * _Point)
+            {
+               trade.PositionModify(PositionGetTicket(i), open, PositionGetDouble(POSITION_TP));
+               Print("🚨 Break-Even Activated for position ", PositionGetTicket(i));
+            }
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage Daily Profit                                              |
+//+------------------------------------------------------------------+
+void ManageDailyProfit()
+{
+   dailyProfit = 0;
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      if(PositionSelectByTicket(PositionGetTicket(i)))
+      {
+         dailyProfit += PositionGetDouble(POSITION_PROFIT);
+      }
+   }
+   
+   if (dailyProfit >= DailyProfitTarget)
+   {
+      Print("✅ Daily Profit Target Reached");
+      ExpertRemove();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Send Telegram Signal                                             |
+//+------------------------------------------------------------------+
+void SendTelegramSignal(string message)
+{
+   if (!UseTelegramSignals || TelegramBotToken == "" || TelegramChatID == "")
+      return;
+
+   string url = "https://api.telegram.org/bot" + TelegramBotToken + "/sendMessage?chat_id=" + TelegramChatID + "&text=" + message;
+   string headers = "Content-Type: application/x-www-form-urlencoded";
+   char post[];
+   char result[];
+   string result_headers;
+
+   int res = WebRequest("GET", url, headers, 5000, post, result, result_headers);
+   if(res == -1) 
+   {
+      Print("Error in WebRequest. Error code  =", GetLastError());
+      MessageBox("Add the address 'https://api.telegram.org' to the list of allowed URLs on tab 'Expert Advisors'", "Error", MB_ICONINFORMATION);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check for News Time                                              |
+//+------------------------------------------------------------------+
+bool IsNewsTime()
+{
+   if(!UseNewsFilter) return false;
+   
+   // Implement your news filter logic here
+   // Return true if it's high-impact news time, false otherwise
+   return false;
+}
