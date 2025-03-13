@@ -1,0 +1,138 @@
+//+------------------------------------------------------------------+
+//| Expert Advisor: Buy & Sell Signal Generator                     |
+//| Generates BUY/SELL signals based on EMA & Bollinger Band rules  |
+//+------------------------------------------------------------------+
+#property strict
+
+// Indicator handles
+int ema10Handle, ema20Handle, ema59Handle, ema200Handle;
+int bandsHandle;
+
+// Buffers for indicator values
+double ema10Buffer[], ema20Buffer[], ema59Buffer[], ema200Buffer[];
+double upperBand[], middleBand[], lowerBand[];
+
+//+------------------------------------------------------------------+
+//| Initialization: Create indicator handles                        |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    // Create EMA handles
+    ema10Handle = iMA(_Symbol, _Period, 10, 0, MODE_EMA, PRICE_CLOSE);
+    ema20Handle = iMA(_Symbol, _Period, 20, 0, MODE_EMA, PRICE_CLOSE);
+    ema59Handle = iMA(_Symbol, _Period, 59, 0, MODE_EMA, PRICE_CLOSE);
+    ema200Handle = iMA(_Symbol, _Period, 200, 0, MODE_EMA, PRICE_CLOSE);
+
+    // Create Bollinger Bands handle
+    bandsHandle = iBands(_Symbol, _Period, 20, 0, 2.0, PRICE_CLOSE);
+
+    // Check for invalid handles
+    if (ema10Handle == INVALID_HANDLE || ema20Handle == INVALID_HANDLE ||
+        ema59Handle == INVALID_HANDLE || ema200Handle == INVALID_HANDLE ||
+        bandsHandle == INVALID_HANDLE)
+    {
+        Print("Failed to create indicator handles.");
+        return INIT_FAILED;
+    }
+
+    return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Main Logic: Runs on every new tick                              |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    int barsToCopy = 1; // Number of bars to copy (most recent closed candle)
+    
+    // Copy EMA values
+    if (CopyBuffer(ema10Handle, 0, 1, barsToCopy, ema10Buffer) <= 0 ||
+        CopyBuffer(ema20Handle, 0, 1, barsToCopy, ema20Buffer) <= 0 ||
+        CopyBuffer(ema59Handle, 0, 1, barsToCopy, ema59Buffer) <= 0 ||
+        CopyBuffer(ema200Handle, 0, 1, barsToCopy, ema200Buffer) <= 0)
+    {
+        Print("Failed to copy EMA values.");
+        return;
+    }
+
+    // Copy Bollinger Bands values
+    if (CopyBuffer(bandsHandle, 1, 1, barsToCopy, upperBand) <= 0 || // Upper band
+        CopyBuffer(bandsHandle, 0, 1, barsToCopy, middleBand) <= 0 || // Middle band
+        CopyBuffer(bandsHandle, 2, 1, barsToCopy, lowerBand) <= 0)   // Lower band
+    {
+        Print("Failed to copy Bollinger Bands values.");
+        return;
+    }
+
+    // Get candle prices for the most recent closed candle
+    double openPrice = iOpen(_Symbol, _Period, 1);
+    double closePrice = iClose(_Symbol, _Period, 1);
+    double highPrice = iHigh(_Symbol,_Period ,1);
+    double lowPrice = iLow(_Symbol,_Period ,1);
+
+    // Valid Candle for Sell (VCS)
+    if (openPrice > ema10Buffer[0] && closePrice > ema10Buffer[0] &&
+        highPrice > upperBand[0] && openPrice < upperBand[0] && closePrice < upperBand[0])
+    {
+        GenerateSignal(false,"Sell Signal (VCS)");
+    }
+
+    // Valid Candle for Buy (VCB)
+    if (openPrice < ema10Buffer[0] && closePrice < ema10Buffer[0] &&
+        lowPrice < lowerBand[0] && openPrice > lowerBand[0] && closePrice > lowerBand[0])
+    {
+        GenerateSignal(true,"Buy Signal (VCB)");
+    }
+
+    // Strong Sell Signal
+    if (ema10Buffer[0] < ema59Buffer[0] && ema20Buffer[0] < ema59Buffer[0] &&
+        openPrice > ema59Buffer[0] && closePrice < ema10Buffer[0] &&
+        SmallWicks(1))
+    {
+        GenerateSignal(false,"Strong Sell Signal");
+    }
+
+    // Strong Buy Signal
+    if (ema10Buffer[0] > ema59Buffer[0] && ema20Buffer[0] > ema59Buffer[0] &&
+        openPrice < ema59Buffer[0] && closePrice > ema10Buffer[0] &&
+        SmallWicks(1))
+    {
+        GenerateSignal(true,"Strong Buy Signal");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check if Candle has Small Wicks                                 |
+//+------------------------------------------------------------------+
+bool SmallWicks(int barIndex)
+{
+    double openPrice = iOpen(_Symbol,_Period ,barIndex);
+    double closePrice = iClose(_Symbol,_Period ,barIndex);
+    double highPrice = iHigh(_Symbol,_Period ,barIndex);
+    double lowPrice = iLow(_Symbol,_Period ,barIndex);
+
+    double candleBody = MathAbs(closePrice - openPrice);
+    double upperWick = highPrice - MathMax(openPrice ,closePrice);
+    double lowerWick = MathMin(openPrice ,closePrice)-lowPrice;
+
+    return ((upperWick + lowerWick) / candleBody) <= 0.2; // Wick < 20% of body
+}
+
+//+------------------------------------------------------------------+
+//| Generate Signal (Arrows & Sound)                                |
+//+------------------------------------------------------------------+
+void GenerateSignal(bool isBuy,string signalType)
+{
+   int arrowCode=isBuy?233:234; 
+   color arrowColor=isBuy?clrBlue:clrRed;
+   double price=isBuy?iLow(_Symbol,_Period ,1)-10*_Point:iHigh(_Symbol,_Period ,1)+10*_Point;
+
+   string objName=signalType+"_"+IntegerToString(TimeCurrent());
+   
+   ObjectCreate(0,objName ,OBJ_ARROW ,0 ,TimeCurrent() ,price);
+   ObjectSetInteger(0,objName ,OBJPROP_ARROWCODE ,arrowCode);
+   ObjectSetInteger(0,objName ,OBJPROP_COLOR ,arrowColor);
+
+   Print(signalType," detected!");
+   PlaySound(isBuy?"buy.wav":"sell.wav");
+}
