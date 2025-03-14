@@ -1,0 +1,263 @@
+//+------------------------------------------------------------------+
+//|                Optimized Hotkey EA with Color Dashboard          |
+//|                        Created by Assistant                     |
+//+------------------------------------------------------------------+
+#include <Trade\Trade.mqh>
+
+CTrade trade;
+
+input double InitialVolume = 0.01;  
+input double VolumeStep = 0.01;  
+
+double LotSize = InitialVolume;
+
+// Hotkeys
+#define KEY_BUY 97       // 'a' key
+#define KEY_SELL 98      // 'b' key
+#define KEY_CLOSE_ALL 99 // 'c' key
+#define KEY_CLOSE_BUY 100 // 'd' key
+#define KEY_CLOSE_SELL 101 // 'e' key
+#define KEY_REVERSE_BUY 103 // 'g' key
+#define KEY_REVERSE_SELL 104 // 'h' key
+#define KEY_INCREASE_LOT 38  // Up arrow
+#define KEY_DECREASE_LOT 40  // Down arrow
+
+// Dashboard settings
+#define X 10
+#define Y 10
+#define LINE_SPACE 25
+
+// Balance tracking
+double StartingBalance = 0;
+double NowBalance = 0;
+double EndingBalance = 0;
+
+int xPos = X, yPos = Y;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   trade.SetAsyncMode(true);
+   StartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   EndingBalance = AccountInfoDouble(ACCOUNT_EQUITY);
+   CreateDashboard();
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   ObjectsDeleteAll(ChartID(), -1, OBJ_LABEL);
+   ObjectsDeleteAll(ChartID(), -1, OBJ_RECTANGLE_LABEL);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   UpdateDashboard();
+}
+
+//+------------------------------------------------------------------+
+//| Chart event handler                                              |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+   if(id == CHARTEVENT_KEYDOWN)
+   {
+      int key = (int)lparam;
+      switch(key)
+      {
+         case KEY_BUY: trade.Buy(LotSize, Symbol()); break;
+         case KEY_SELL: trade.Sell(LotSize, Symbol()); break;
+         case KEY_CLOSE_BUY: ClosePositions(POSITION_TYPE_BUY); break;
+         case KEY_CLOSE_SELL: ClosePositions(POSITION_TYPE_SELL); break;
+         case KEY_CLOSE_ALL: CloseAllPositions(); break;
+         case KEY_REVERSE_BUY: ReversePosition(POSITION_TYPE_BUY); break;
+         case KEY_REVERSE_SELL: ReversePosition(POSITION_TYPE_SELL); break;
+         case KEY_INCREASE_LOT: LotSize += VolumeStep; break;
+         case KEY_DECREASE_LOT: LotSize = MathMax(InitialVolume, LotSize - VolumeStep); break;
+      }
+   }
+   else if(id == CHARTEVENT_OBJECT_DRAG && sparam == "Dashboard_BG")
+   {
+      xPos = (int)ObjectGetInteger(ChartID(), sparam, OBJPROP_XDISTANCE);
+      yPos = (int)ObjectGetInteger(ChartID(), sparam, OBJPROP_YDISTANCE);
+      UpdateDashboard();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Fast position closer                                             |
+//+------------------------------------------------------------------+
+void ClosePositions(int positionType)
+{
+   ulong tickets[];
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_TYPE) == positionType)
+      {
+         int size = ArraySize(tickets);
+         ArrayResize(tickets, size+1);
+         tickets[size] = ticket;
+      }
+   }
+   for(int i = 0; i < ArraySize(tickets); i++)
+      trade.PositionClose(tickets[i]);
+}
+
+//+------------------------------------------------------------------+
+//| Close all positions                                              |
+//+------------------------------------------------------------------+
+void CloseAllPositions()
+{
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+      trade.PositionClose(PositionGetTicket(i));
+}
+
+//+------------------------------------------------------------------+
+//| Reverse positions                                                |
+//+------------------------------------------------------------------+
+void ReversePosition(int positionType)
+{
+   double totalLots = 0;
+   ulong tickets[];
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_TYPE) == positionType)
+      {
+         totalLots += PositionGetDouble(POSITION_VOLUME);
+         int size = ArraySize(tickets);
+         ArrayResize(tickets, size+1);
+         tickets[size] = ticket;
+      }
+   }
+   for(int i = 0; i < ArraySize(tickets); i++)
+      trade.PositionClose(tickets[i]);
+      
+   if(totalLots > 0)
+   {
+      if(positionType == POSITION_TYPE_BUY)
+         trade.Sell(totalLots*2, Symbol());
+      else
+         trade.Buy(totalLots*2, Symbol());
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Dashboard Creation                                               |
+//+------------------------------------------------------------------+
+void CreateDashboard()
+{
+   CreateRectangle("Dashboard_BG", xPos, yPos, 300, 220, clrSilver);
+   int line_y = 10;
+   CreateLabel("BUY_TITLE", "B U Y", 10, line_y, clrBlue, 14); line_y += LINE_SPACE;
+   CreateLabel("BUY_LOT", "LOT: 0.00", 10, line_y, clrBlue, 12); line_y += LINE_SPACE;
+   CreateLabel("BUY_PROFIT", "PROFIT: $0.00", 10, line_y, clrBlue, 12); line_y += LINE_SPACE;
+   CreateLabel("BUY_TRADES", "TRADES: 0", 10, line_y, clrBlue, 12); line_y += LINE_SPACE + 5;
+   
+   CreateLabel("SELL_TITLE", "S E L L", 160, 10, clrRed, 14);
+   CreateLabel("SELL_LOT", "LOT: 0.00", 160, 35, clrRed, 12);
+   CreateLabel("SELL_PROFIT", "PROFIT: $0.00", 160, 60, clrRed, 12);
+   CreateLabel("SELL_TRADES", "TRADES: 0", 160, 85, clrRed, 12);
+   
+   CreateLabel("START_BALANCE", "Opening Balance: $" + DoubleToString(StartingBalance,2), 80, 120, clrGreen, 12);
+   CreateLabel("NOW_BALANCE", "Current Balance: $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),2), 80, 140, clrBlue, 12);
+   CreateLabel("END_BALANCE", "Equity: $" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY),2), 80, 160, clrRed, 12);
+   CreateLabel("TOTAL_PROFIT", "T O T A L 💪: $0.00", 80, 180, clrBlue, 15);
+}
+
+//+------------------------------------------------------------------+
+//| Dashboard Components                                             |
+//+------------------------------------------------------------------+
+void CreateRectangle(string name, int x, int y, int width, int height, color bg)
+{
+   if(ObjectFind(ChartID(), name) == -1)
+   {
+      ObjectCreate(ChartID(), name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(ChartID(), name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(ChartID(), name, OBJPROP_XDISTANCE, x);
+      ObjectSetInteger(ChartID(), name, OBJPROP_YDISTANCE, y);
+      ObjectSetInteger(ChartID(), name, OBJPROP_XSIZE, width);
+      ObjectSetInteger(ChartID(), name, OBJPROP_YSIZE, height);
+      ObjectSetInteger(ChartID(), name, OBJPROP_COLOR, bg);
+      ObjectSetInteger(ChartID(), name, OBJPROP_SELECTABLE, true);
+      ObjectSetInteger(ChartID(), name, OBJPROP_BACK, false);
+   }
+}
+
+void CreateLabel(string name, string text, int offset_x, int offset_y, color col, int fontsize)
+{
+   if(ObjectFind(ChartID(), name) == -1)
+   {
+      ObjectCreate(ChartID(), name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetString(ChartID(), name, OBJPROP_TEXT, text);
+      ObjectSetInteger(ChartID(), name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(ChartID(), name, OBJPROP_XDISTANCE, xPos + offset_x);
+      ObjectSetInteger(ChartID(), name, OBJPROP_YDISTANCE, yPos + offset_y);
+      ObjectSetInteger(ChartID(), name, OBJPROP_FONTSIZE, fontsize);
+      ObjectSetInteger(ChartID(), name, OBJPROP_COLOR, col);
+      ObjectSetInteger(ChartID(), name, OBJPROP_BACK, false);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update Dashboard                                                 |
+//+------------------------------------------------------------------+
+void UpdateDashboard()
+{
+   double BuyLots = 0, BuyProfit = 0, SellLots = 0, SellProfit = 0;
+   int BuyTrades = 0, SellTrades = 0;
+
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         double profit = PositionGetDouble(POSITION_PROFIT);
+         double lots = PositionGetDouble(POSITION_VOLUME);
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+         {
+            BuyLots += lots;
+            BuyProfit += profit;
+            BuyTrades++;
+         }
+         else
+         {
+            SellLots += lots;
+            SellProfit += profit;
+            SellTrades++;
+         }
+      }
+   }
+
+   NowBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   EndingBalance = AccountInfoDouble(ACCOUNT_EQUITY);
+   double TotalProfit = BuyProfit + SellProfit;
+
+   // Update Buy Section
+   ObjectSetString(0, "BUY_LOT", OBJPROP_TEXT, "LOT: " + DoubleToString(BuyLots,2));
+   ObjectSetString(0, "BUY_PROFIT", OBJPROP_TEXT, "PROFIT: $" + DoubleToString(BuyProfit,2));
+   ObjectSetInteger(0, "BUY_PROFIT", OBJPROP_COLOR, BuyProfit >=0 ? clrGreen : clrRed);
+   
+   // Update Sell Section
+   ObjectSetString(0, "SELL_LOT", OBJPROP_TEXT, "LOT: " + DoubleToString(SellLots,2));
+   ObjectSetString(0, "SELL_PROFIT", OBJPROP_TEXT, "PROFIT: $" + DoubleToString(SellProfit,2));
+   ObjectSetInteger(0, "SELL_PROFIT", OBJPROP_COLOR, SellProfit >=0 ? clrGreen : clrRed);
+   
+   // Update Balance Information
+   ObjectSetString(0, "NOW_BALANCE", OBJPROP_TEXT, "Current Balance: $" + DoubleToString(NowBalance,2));
+   ObjectSetString(0, "END_BALANCE", OBJPROP_TEXT, "Equity: $" + DoubleToString(EndingBalance,2));
+   
+   // Update Total Profit
+   ObjectSetString(0, "TOTAL_PROFIT", OBJPROP_TEXT, "T O T A L 💪: $" + DoubleToString(TotalProfit,2));
+   ObjectSetInteger(0, "TOTAL_PROFIT", OBJPROP_COLOR, TotalProfit >=0 ? clrGreen : clrRed);
+}
+//+------------------------------------------------------------------+
