@@ -1,0 +1,419 @@
+//+------------------------------------------------------------------+
+//|                Trading Dashboard EA with Hotkeys                 |
+//|                       Designed by Assistant                     |
+//+------------------------------------------------------------------+
+#include <Trade\Trade.mqh>
+#property copyright "Assistant"
+#property version   "1.24"
+#property description "Trading Dashboard with Hotkeys and Visual Display"
+
+CTrade trade;
+
+// Input Parameters
+input double InitialVolume = 0.01;    // Initial Lot Size
+input double VolumeStep = 0.01;       // Lot Size Step
+input color  BuyColor = C'0,255,255'; // Neon Blue
+input color  SellColor = C'255,0,255';// Neon Pink
+
+// Hotkey Configuration
+input int InpHotkeyMarketBuy = 97;         // Numpad 1 - Market Buy
+input int InpHotkeyMarketSell = 98;        // Numpad 2 - Market Sell
+input int InpHotkeyReverseBuy = 103;       // Numpad 7 - Reverse Buy
+input int InpHotkeyReverseSell = 104;      // Numpad 8 - Reverse Sell
+input int InpHotkeyCloseBuy = 100;         // Numpad 4 - Close Buys
+input int InpHotkeyCloseSell = 101;        // Numpad 5 - Close Sells
+input int InpHotkeyCloseAll = 99;          // Numpad 3 - Close All
+input int InpHotkeyIncreaseVolume = 38;    // Up Arrow - Increase Volume
+input int InpHotkeyDecreaseVolume = 40;    // Down Arrow - Decrease Volume
+
+// Layout Constants
+#define DASH_WIDTH      400
+#define MARGIN_LEFT     15
+#define MARGIN_RIGHT    15
+#define MARGIN_TOP      20
+#define SECTION_SPACE   25
+#define COL_WIDTH       170
+#define ROW_HEIGHT      28
+#define FONT_MAIN       "Arial"
+#define FONT_DIGITAL    "Digital-7"
+
+// Global Variables
+double LotSize = InitialVolume;
+int xPos = 10, yPos = 10;
+double StartingBalance = 0;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    trade.SetAsyncMode(true);
+    StartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    CreateDashboard();
+    ChartSetInteger(0, CHART_SHOW_OBJECT_DESCR, false);
+    ChartRedraw();
+    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+    ObjectsDeleteAll(0, -1, OBJ_LABEL);
+    ObjectsDeleteAll(0, -1, OBJ_RECTANGLE_LABEL);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    UpdateDashboard();
+}
+
+//+------------------------------------------------------------------+
+//| Chart event handler                                              |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+    if(id == CHARTEVENT_KEYDOWN)
+    {
+        int pressedKey = (int)lparam;
+        
+        if(pressedKey == InpHotkeyMarketBuy)
+        {
+            trade.Buy(LotSize, _Symbol);
+        }
+        else if(pressedKey == InpHotkeyMarketSell)
+        {
+            trade.Sell(LotSize, _Symbol);
+        }
+        else if(pressedKey == InpHotkeyCloseBuy)
+        {
+            ClosePositionsByType(POSITION_TYPE_BUY);
+        }
+        else if(pressedKey == InpHotkeyCloseSell)
+        {
+            ClosePositionsByType(POSITION_TYPE_SELL);
+        }
+        else if(pressedKey == InpHotkeyCloseAll)
+        {
+            CloseAllPositions();
+        }
+        else if(pressedKey == InpHotkeyReverseBuy)
+        {
+            ReverseBuyPosition();
+        }
+        else if(pressedKey == InpHotkeyReverseSell)
+        {
+            ReverseSellPosition();
+        }
+        else if(pressedKey == InpHotkeyIncreaseVolume)
+        {
+            LotSize += VolumeStep;
+            LotSize = NormalizeDouble(LotSize, 2);
+        }
+        else if(pressedKey == InpHotkeyDecreaseVolume)
+        {
+            LotSize -= VolumeStep;
+            double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+            if(LotSize < minLot) LotSize = minLot;
+            LotSize = NormalizeDouble(LotSize, 2);
+        }
+    }
+   else if(id == CHARTEVENT_OBJECT_DRAG && sparam == "MainBG")
+{
+    xPos = (int)ObjectGetInteger(0, "MainBG", OBJPROP_XDISTANCE);
+    yPos = (int)ObjectGetInteger(0, "MainBG", OBJPROP_YDISTANCE);
+    ObjectsDeleteAll(0, -1, OBJ_LABEL);
+    ObjectsDeleteAll(0, -1, OBJ_RECTANGLE_LABEL);
+    CreateDashboard();
+}
+
+else if(id == CHARTEVENT_OBJECT_DRAG && sparam == "MainBG")
+{
+    // Get new X, Y positions
+    xPos = (int)ObjectGetInteger(0, "MainBG", OBJPROP_XDISTANCE);
+    yPos = (int)ObjectGetInteger(0, "MainBG", OBJPROP_YDISTANCE);
+    
+    // Update all objects dynamically
+    UpdateDashboardPosition();
+}
+}
+
+//+------------------------------------------------------------------+
+//| Position management functions                                    |
+//+------------------------------------------------------------------+
+void CloseAllPositions()
+{
+    for(int i = PositionsTotal()-1; i >= 0; i--)
+        trade.PositionClose(PositionGetTicket(i));
+}
+
+void ClosePositionsByType(ENUM_POSITION_TYPE type)
+{
+    for(int i = PositionsTotal()-1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_TYPE) == type)
+            trade.PositionClose(ticket);
+    }
+}
+
+void ReverseBuyPosition()
+{
+    double buyLots = 0;
+    for(int i = PositionsTotal()-1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+        {
+            buyLots += PositionGetDouble(POSITION_VOLUME);
+            trade.PositionClose(ticket);
+        }
+    }
+    if(buyLots > 0) trade.Sell(buyLots*2, _Symbol);
+}
+
+void ReverseSellPosition()
+{
+    double sellLots = 0;
+    for(int i = PositionsTotal()-1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+        {
+            sellLots += PositionGetDouble(POSITION_VOLUME);
+            trade.PositionClose(ticket);
+        }
+    }
+    if(sellLots > 0) trade.Buy(sellLots*2, _Symbol);
+}
+
+void UpdateDashboardPosition()
+{
+    // Update Main Panel Position
+    ObjectSetInteger(0, "MainBG", OBJPROP_XDISTANCE, xPos);
+    ObjectSetInteger(0, "MainBG", OBJPROP_YDISTANCE, yPos);
+    
+    // Adjust other elements accordingly
+    int col1X = xPos + MARGIN_LEFT;
+    int col2X = xPos + DASH_WIDTH/2;
+    int currentY = yPos + MARGIN_TOP;
+
+    // Update Buy Section
+    ObjectSetInteger(0, "BuySec", OBJPROP_XDISTANCE, col1X);
+    ObjectSetInteger(0, "BuySec", OBJPROP_YDISTANCE, currentY);
+    ObjectSetInteger(0, "BuyLots", OBJPROP_XDISTANCE, col1X + 10);
+    ObjectSetInteger(0, "BuyLots", OBJPROP_YDISTANCE, currentY + ROW_HEIGHT);
+    ObjectSetInteger(0, "BuyPL", OBJPROP_XDISTANCE, col1X + 10);
+    ObjectSetInteger(0, "BuyPL", OBJPROP_YDISTANCE, currentY + ROW_HEIGHT * 2);
+
+    // Update Sell Section
+    ObjectSetInteger(0, "SellSec", OBJPROP_XDISTANCE, col2X);
+    ObjectSetInteger(0, "SellSec", OBJPROP_YDISTANCE, currentY);
+    ObjectSetInteger(0, "SellLots", OBJPROP_XDISTANCE, col2X + 10);
+    ObjectSetInteger(0, "SellLots", OBJPROP_YDISTANCE, currentY + ROW_HEIGHT);
+    ObjectSetInteger(0, "SellPL", OBJPROP_XDISTANCE, col2X + 10);
+    ObjectSetInteger(0, "SellPL", OBJPROP_YDISTANCE, currentY + ROW_HEIGHT * 2);
+
+    // Update Account Summary
+    int sumY = currentY + 100;
+    ObjectSetInteger(0, "SummarySec", OBJPROP_XDISTANCE, xPos + MARGIN_LEFT);
+    ObjectSetInteger(0, "SummarySec", OBJPROP_YDISTANCE, sumY);
+    
+    // Force Redraw
+    ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Dashboard Creation                                               |
+//+------------------------------------------------------------------+
+void CreateDashboard()
+{
+    int maxY = yPos;
+    
+    #define DASH_WIDTH      400  // Increased from 400 to 500
+ 
+
+    // Create main container
+    CreatePanel("MainBG", xPos, yPos, DASH_WIDTH, 400, C'25,25,25', 250, 2, clrGray);
+    
+    // Positions Section
+int col1X = xPos + MARGIN_LEFT;
+int currentY = yPos + MARGIN_TOP;
+
+
+    // Buy Positions Section
+    CreateSection("BuySec",col1X, currentY, DASH_WIDTH - MARGIN_LEFT - MARGIN_RIGHT, 90, C'40,40,40', clrDodgerBlue);
+    CreateLabel("BuyHeader", "BUY POSITIONS", col1X+10, currentY+5, BuyColor, 12, FONT_MAIN);
+    CreateField("BuyLots", "Lots: 0.00", col1X+10, currentY+=ROW_HEIGHT, clrWhite, 12, FONT_MAIN);
+    CreateField("BuyPL", "P/L: $0.00", col1X+10, currentY+=ROW_HEIGHT, clrWhite, 12, FONT_MAIN);
+    
+    maxY = MathMax(maxY, currentY);
+    
+    // Define the top Y position of the box (adjust as needed)
+   double StartY = 30; // Adjust this value as needed
+   double TopY = StartY; // Use an existing variable or define a specific value
+
+   // Define the right-side position
+   double RightX = col1X + COL_WIDTH - 28; // Adjust spacing as needed
+
+    // Create Lot Size Label
+    CreateLabel("LotSizeLabel", "LOT SIZE",RightX + 10, TopY + 5, SellColor, 12, FONT_MAIN);
+    CreateField("LotSizeValue", DoubleToString(2),RightX + 10, TopY += ROW_HEIGHT, clrWhite, 12, FONT_MAIN);
+
+
+ // Define the top Y position of the box (adjust as needed)
+ double startY = 30; // Adjust this value as needed
+double topY = startY; // Use an existing variable or define a specific value
+
+// Define the right-side position
+double rightX = col1X + COL_WIDTH + 60; // Adjust spacing as needed
+
+// Sell Positions Section (placed at the top)
+CreateLabel("SellHeader", "SELL POSITIONS", rightX + 10, topY + 5, SellColor, 12, FONT_MAIN);
+CreateField("SellLots", "Lots: 0.00", rightX + 10, topY += ROW_HEIGHT, clrWhite, 12, FONT_MAIN);
+CreateField("SellPL", "P/L: $0.00", rightX + 10, topY += ROW_HEIGHT, clrWhite, 12, FONT_MAIN);
+maxY = MathMax(maxY, topY);
+
+
+
+    // Account Summary Section
+    currentY += SECTION_SPACE + 30;
+    CreateSection("SummarySec", xPos+MARGIN_LEFT, currentY, DASH_WIDTH-MARGIN_LEFT-MARGIN_RIGHT, 90, C'40,40,40', clrDodgerBlue);
+    maxY = MathMax(maxY, currentY + 90);
+    
+    int sumX = xPos + MARGIN_LEFT + 20;
+    int sumY = currentY + 20;
+    int sumCol = (DASH_WIDTH - MARGIN_LEFT - MARGIN_RIGHT - 30)/3.0;
+    
+    CreateLabel("EquityLabel", "EQUITY", sumX, sumY, clrSilver, 12, FONT_MAIN);
+    CreateField("EquityValue", "$0.00", sumX, sumY+=ROW_HEIGHT, clrWhite, 12, FONT_DIGITAL);
+    
+    CreateLabel("BalanceLabel", "BALANCE", sumX+sumCol, sumY-ROW_HEIGHT, clrSilver, 12, FONT_MAIN);
+    CreateField("BalanceValue", "$0.00", sumX+sumCol, sumY, clrWhite, 12, FONT_DIGITAL);
+    
+    CreateLabel("TotalLabel", "TOTAL PNL", sumX+sumCol*2 ,sumY-ROW_HEIGHT, clrSilver, 12, FONT_MAIN);
+    CreateField("TotalProfit", "$0.00", sumX+sumCol*2, sumY, clrWhite, 14, FONT_DIGITAL);
+    
+
+    // Adjust main background size
+    ObjectSetInteger(0, "MainBG", OBJPROP_YSIZE, maxY - yPos + MARGIN_TOP + 20);
+}
+
+//+------------------------------------------------------------------+
+//| UI Components                                                    |
+//+------------------------------------------------------------------+
+void CreatePanel(string name, int x, int y, int w, int h, color bg, int opacity, int border, color borderClr)
+{
+    if(ObjectFind(0, name) < 0)
+    {
+        ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+        ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+        ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+        ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+        ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+        ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
+        ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, borderClr);
+        ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+        ObjectSetInteger(0, name, OBJPROP_WIDTH, border);
+        ObjectSetInteger(0, name, OBJPROP_BACK, false);
+        ObjectSetInteger(0, name, OBJPROP_SELECTABLE, true);
+        ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+    }
+}
+
+void CreateSection(string name, int x, int y, int w, int h, color bg, color borderClr)
+{
+    CreatePanel(name, x, y, w, h, bg, 255, 1, borderClr);
+}
+
+void CreateLabel(string name, string text, int x, int y, color col, int size, string font)
+{
+    if(ObjectFind(0, name) < 0)
+    {
+        ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+        ObjectSetString(0, name, OBJPROP_TEXT, text);
+        ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+        ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+        ObjectSetInteger(0, name, OBJPROP_COLOR, col);
+        ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+        ObjectSetString(0, name, OBJPROP_FONT, font);
+        ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+        ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+    }
+}
+
+void CreateField(string name, string text, int x, int y, color col, int size, string font)
+{
+    CreateLabel(name, text, x, y, col, size, font);
+}
+
+//+------------------------------------------------------------------+
+//| Dashboard Update                                                 |
+//+------------------------------------------------------------------+
+void UpdateDashboard()
+{
+    double buyLots=0, buyPL=0, sellLots=0, sellPL=0;
+
+    for(int i=PositionsTotal()-1; i>=0; i--)
+    {
+        ulong ticket=PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket))
+        {
+            double vol=PositionGetDouble(POSITION_VOLUME);
+            double pl=PositionGetDouble(POSITION_PROFIT);
+            
+            if(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)
+            {
+                buyLots+=vol;
+                buyPL+=pl;
+            }
+            else
+            {
+                sellLots+=vol;
+                sellPL+=pl;
+            }
+        }
+    }
+
+
+   // Update Buy & Sell Positions in One Box
+ObjectSetString(0, "TotalLots", OBJPROP_TEXT, 
+    "Lots: " + DoubleToString(buyLots + sellLots, 2) + 
+    " (B: " + DoubleToString(buyLots, 2) + " | S: " + DoubleToString(sellLots, 2) + ")");
+
+ObjectSetString(0, "TotalPL", OBJPROP_TEXT, 
+    "P/L: $" + DoubleToString(buyPL + sellPL, 2) + 
+    " (B: $" + DoubleToString(buyPL, 2) + " | S: $" + DoubleToString(sellPL, 2) + ")");
+ObjectSetInteger(0, "TotalPL", OBJPROP_COLOR, (buyPL + sellPL) >= 0 ? clrLime : clrRed);
+
+    // Update Buy Positions
+    ObjectSetString(0,"BuyLots",OBJPROP_TEXT,"Lots: "+DoubleToString(buyLots,2));
+    ObjectSetString(0,"BuyPL",OBJPROP_TEXT,"P/L: $"+DoubleToString(buyPL,2));
+    ObjectSetInteger(0,"BuyPL",OBJPROP_COLOR,buyPL>=0?clrLime:clrRed);
+
+    // Update Sell Positions
+    ObjectSetString(0,"SellLots",OBJPROP_TEXT,"Lots: "+DoubleToString(sellLots,2));
+    ObjectSetString(0,"SellPL",OBJPROP_TEXT,"P/L: $"+DoubleToString(sellPL,2));
+    ObjectSetInteger(0,"SellPL",OBJPROP_COLOR,sellPL>=0?clrLime:clrRed);
+
+    // Update Summary
+    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
+    double balance=AccountInfoDouble(ACCOUNT_BALANCE);
+    double totalPL=AccountInfoDouble(ACCOUNT_PROFIT);
+    
+    ObjectSetString(0,"EquityValue",OBJPROP_TEXT,"$"+DoubleToString(equity,2));
+    ObjectSetString(0,"BalanceValue",OBJPROP_TEXT,"$"+DoubleToString(balance,2));
+    ObjectSetString(0,"TotalProfit",OBJPROP_TEXT,"$"+DoubleToString(totalPL,2));
+    ObjectSetInteger(0,"TotalProfit",OBJPROP_COLOR,totalPL>=0?clrLime:clrRed);
+    
+    // Update Lot Size Display
+    ObjectSetString(0, "LotSizeValue", OBJPROP_TEXT, DoubleToString(LotSize, 2));
+
+    
+    ChartRedraw();
+}
+//+------------------------------------------------------------------
