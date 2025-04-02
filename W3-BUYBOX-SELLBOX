@@ -1,0 +1,598 @@
+#property copyright "Professional Trading Tools"
+#property version   "1.70"
+#property description "Enhanced BuyBox/SellBox System with Improved Simultaneous Trading"
+
+// Include the Trade class
+#include <Trade\Trade.mqh>
+CTrade trade;
+
+// Dashboard Configuration
+#define BTN_WIDTH   96       // 1x1 inch buttons
+#define BTN_HEIGHT  96
+#define PANEL_X     20
+#define PANEL_Y     20
+#define POINTS_OFFSET 200    // 200 points distance
+#define CANDLE_OFFSET 5      // Start from 5th candle
+#define TOGGLE_BTN_WIDTH 30  // Width of toggle button
+#define TOGGLE_BTN_HEIGHT 20 // Height of toggle button
+
+// Order Settings Structure
+struct BoxSettings {
+    int       totalOrders;
+    double    initialLot;
+    double    lotStep;
+    bool      isBuy;
+    string    boxName;
+    double    upperPrice;
+    double    lowerPrice;
+    datetime  startTime;
+    datetime  endTime;
+    bool      boxEnabled;
+    double    orderLevels[];
+    bool      orderExecuted[];
+    int       ordersPlaced;
+    double    totalLots;
+};
+
+int magicNumber = 159753;
+BoxSettings boxes[];
+double maxRiskPercent = 2.0; // Maximum 2% risk per box
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit() {
+   CreateDashboard();
+   EventSetTimer(1);
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Create control dashboard                                         |
+//+------------------------------------------------------------------+
+void CreateDashboard() {
+   CreateButton("BuyButton", PANEL_X, PANEL_Y, BTN_WIDTH, BTN_HEIGHT, "BUYBOX", clrDarkGreen);
+   CreateButton("SellButton", PANEL_X+BTN_WIDTH+10, PANEL_Y, BTN_WIDTH, BTN_HEIGHT, "SELLBOX", clrDarkRed);
+   CreateButton("CloseAllBtn", PANEL_X+BTN_WIDTH*2+20, PANEL_Y, BTN_WIDTH, BTN_HEIGHT, "CLOSE ALL", clrDarkGray);
+   ChartRedraw();
+}
+
+void CreateButton(string name, int x, int y, int width, int height, string text, color bgColor) {
+   if(ObjectFind(0, name) < 0) {
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+      ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
+      ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
+      ObjectSetString(0, name, OBJPROP_TEXT, text);
+      ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgColor);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, clrWhite);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Buy Box Functions                                               |
+//+------------------------------------------------------------------+
+void CreateBuyBox() {
+   if(ArraySize(boxes) >= 10) {
+      Alert("Maximum 10 boxes allowed!");
+      return;
+   }
+
+   string boxName = "BuyBox_" + IntegerToString(GetTickCount());
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
+   datetime startTime = iTime(_Symbol, 0, CANDLE_OFFSET);
+   datetime endTime = iTime(_Symbol, 0, CANDLE_OFFSET + 5);
+   double priceOffset = POINTS_OFFSET * _Point;
+
+   double boxTop = price - priceOffset;
+   double boxBottom = boxTop - priceOffset;
+
+   if(IsBoxOverlapping(boxTop, boxBottom, startTime, endTime)) {
+      Alert("Box would overlap with existing box!");
+      return;
+   }
+
+   CreateBuyRectangle(boxName, startTime, boxTop, endTime, boxBottom);
+   InitializeBuyBoxSettings(boxName, boxTop, boxBottom, startTime, endTime);
+   CreateBoxControls(boxName, endTime, boxBottom);
+   ChartRedraw();
+}
+
+void CreateBuyRectangle(string name, datetime t1, double p1, datetime t2, double p2) {
+   ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clrLime);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, ColorToARGB(clrGreen, 230));
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, true);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+}
+
+void InitializeBuyBoxSettings(string boxName, double top, double bottom, datetime start, datetime end) {
+   int size = ArraySize(boxes);
+   ArrayResize(boxes, size+1);
+   boxes[size].boxName = boxName;
+   boxes[size].isBuy = true;
+   boxes[size].totalOrders = 5;  // Default to 5 orders
+   boxes[size].initialLot = 0.01;
+   boxes[size].lotStep = 0.01;
+   boxes[size].upperPrice = top;
+   boxes[size].lowerPrice = bottom;
+   boxes[size].startTime = start;
+   boxes[size].endTime = end;
+   boxes[size].boxEnabled = true;
+   boxes[size].ordersPlaced = 0;
+   boxes[size].totalLots = 0;
+   UpdateBuyOrderLevels(boxes[size]);
+}
+
+void UpdateBuyOrderLevels(BoxSettings &box) {
+   if(box.totalOrders < 1) return;
+   
+   double priceStep = (box.upperPrice - box.lowerPrice) / (box.totalOrders-1);
+   ArrayResize(box.orderLevels, box.totalOrders);
+   ArrayResize(box.orderExecuted, box.totalOrders);
+   
+   for(int i=0; i<box.totalOrders; i++) {
+      box.orderLevels[i] = box.upperPrice - (i * priceStep);
+      box.orderExecuted[i] = false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Sell Box Functions                                              |
+//+------------------------------------------------------------------+
+void CreateSellBox() {
+   if(ArraySize(boxes) >= 10) {
+      Alert("Maximum 10 boxes allowed!");
+      return;
+   }
+
+   string boxName = "SellBox_" + IntegerToString(GetTickCount());
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   
+   datetime startTime = iTime(_Symbol, 0, CANDLE_OFFSET);
+   datetime endTime = iTime(_Symbol, 0, CANDLE_OFFSET + 5);
+   double priceOffset = POINTS_OFFSET * _Point;
+
+   double boxBottom = price + priceOffset;
+   double boxTop = boxBottom + priceOffset;
+
+   if(IsBoxOverlapping(boxTop, boxBottom, startTime, endTime)) {
+      Alert("Box would overlap with existing box!");
+      return;
+   }
+
+   CreateSellRectangle(boxName, startTime, boxTop, endTime, boxBottom);
+   InitializeSellBoxSettings(boxName, boxTop, boxBottom, startTime, endTime);
+   CreateBoxControls(boxName, endTime, boxBottom);
+   ChartRedraw();
+}
+
+void CreateSellRectangle(string name, datetime t1, double p1, datetime t2, double p2) {
+   ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clrRed);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, ColorToARGB(clrRed, 230));
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, true);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+}
+
+void InitializeSellBoxSettings(string boxName, double top, double bottom, datetime start, datetime end) {
+   int size = ArraySize(boxes);
+   ArrayResize(boxes, size+1);
+   boxes[size].boxName = boxName;
+   boxes[size].isBuy = false;
+   boxes[size].totalOrders = 5;  // Default to 5 orders
+   boxes[size].initialLot = 0.01;
+   boxes[size].lotStep = 0.01;
+   boxes[size].upperPrice = top;
+   boxes[size].lowerPrice = bottom;
+   boxes[size].startTime = start;
+   boxes[size].endTime = end;
+   boxes[size].boxEnabled = true;
+   boxes[size].ordersPlaced = 0;
+   boxes[size].totalLots = 0;
+   UpdateSellOrderLevels(boxes[size]);
+}
+
+void UpdateSellOrderLevels(BoxSettings &box) {
+   if(box.totalOrders < 1) return;
+   
+   double priceStep = (box.upperPrice - box.lowerPrice) / (box.totalOrders-1);
+   ArrayResize(box.orderLevels, box.totalOrders);
+   ArrayResize(box.orderExecuted, box.totalOrders);
+   
+   for(int i=0; i<box.totalOrders; i++) {
+      box.orderLevels[i] = box.lowerPrice + (i * priceStep);
+      box.orderExecuted[i] = false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Common Box Functions                                            |
+//+------------------------------------------------------------------+
+bool IsBoxOverlapping(double newUpper, double newLower, datetime newStart, datetime newEnd) {
+   for(int i=0; i<ArraySize(boxes); i++) {
+      if((newUpper >= boxes[i].lowerPrice && newLower <= boxes[i].upperPrice) && 
+         (newStart <= boxes[i].endTime && newEnd >= boxes[i].startTime)) {
+         return true;
+      }
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Updated Box Controls with colored settings icons                 |
+//+------------------------------------------------------------------+
+void CreateBoxControls(string boxName, datetime boxTime, double boxPrice)
+{
+   // Delete existing controls
+   ObjectDelete(0, boxName+"_settings");
+   ObjectDelete(0, boxName+"_close");
+   ObjectDelete(0, boxName+"_toggle");
+
+   // Find the box index
+   int index = FindBoxIndex(boxName);
+   if(index == -1) return;
+
+   // Get box left edge coordinates
+   int x1, y1, x2, y2;
+   ChartTimePriceToXY(0, 0, boxes[index].startTime, boxes[index].upperPrice, x1, y1);
+   
+   // Position controls on left side (5px padding from edge)
+   int btnX = x1 - 275; // Start from left edge
+   int btnY = y1 + 5;    // 5px from top
+
+   // Create controls left-to-right (toggle, settings, close)
+   string toggleSymbol = boxes[index].boxEnabled ? "⏻" : "⏻";
+   color toggleColor = boxes[index].boxEnabled ? clrLime : clrRed;
+   
+   // Set settings icon color based on box type
+   color settingsColor = boxes[index].isBuy ? clrLime : clrRed;
+   
+   // ON/OFF button (15px size)
+   CreateControlButton(boxName+"_toggle", btnX, btnY, toggleSymbol, toggleColor, 15); 
+   
+   // Settings button (15px size) - now colored based on box type
+   CreateControlButton(boxName+"_settings", btnX + 30, btnY, "⚙", settingsColor, 15); 
+   
+   // Close button (15px size)
+   CreateControlButton(boxName+"_close", btnX + 60, btnY, "❌", clrRed, 15);
+}
+
+//+------------------------------------------------------------------+
+//| Create minimalist control buttons (no borders)                   |
+//+------------------------------------------------------------------+
+void CreateControlButton(string name, int x, int y, string text, color textColor=clrWhite, int fontSize=10) 
+{
+   ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, textColor);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, 1);
+}
+
+//+------------------------------------------------------------------+
+//| Order Execution                                                  |
+//+------------------------------------------------------------------+
+void OnTimer() {
+   for(int i=0; i<ArraySize(boxes); i++) {
+      if(!boxes[i].boxEnabled || boxes[i].totalOrders < 1) continue;
+      
+      MqlTick last_tick;
+      if(!SymbolInfoTick(_Symbol, last_tick)) continue;
+      
+      if(boxes[i].isBuy) {
+         CheckBuyBoxOrders(boxes[i], last_tick);
+      } else {
+         CheckSellBoxOrders(boxes[i], last_tick);
+      }
+   }
+}
+
+void CheckBuyBoxOrders(BoxSettings &box, MqlTick &tick) {
+   for(int j=0; j<box.totalOrders; j++) {
+      if(box.orderExecuted[j]) continue;
+      
+      if(tick.bid <= box.orderLevels[j] && tick.bid >= box.lowerPrice) {
+         ExecuteTrade(box, j);
+      }
+   }
+}
+
+void CheckSellBoxOrders(BoxSettings &box, MqlTick &tick) {
+   for(int j=0; j<box.totalOrders; j++) {
+      if(box.orderExecuted[j]) continue;
+      
+      if(tick.ask >= box.orderLevels[j] && tick.ask <= box.upperPrice) {
+         ExecuteTrade(box, j);
+      }
+   }
+}
+
+void ExecuteTrade(BoxSettings &box, int index) {
+   if(box.initialLot <= 0 || box.orderExecuted[index]) return;
+   
+   double lotSize = NormalizeDouble(box.initialLot + (index * box.lotStep), 2);
+   
+   // Check risk before executing
+   double riskAmount = CalculateRisk(lotSize, box.isBuy);
+   if(riskAmount > AccountInfoDouble(ACCOUNT_BALANCE) * maxRiskPercent/100.0) {
+      Print("Risk exceeds ", maxRiskPercent, "% of account balance. Trade not executed.");
+      return;
+   }
+   
+   ENUM_ORDER_TYPE cmd = box.isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double price = box.isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
+   MqlTradeRequest request = {};
+   MqlTradeResult result = {};
+   
+   request.action = TRADE_ACTION_DEAL;
+   request.symbol = _Symbol;
+   request.volume = lotSize;
+   request.type = cmd;
+   request.price = price;
+   request.deviation = 10;
+   request.magic = magicNumber + (box.isBuy ? 1000 : 2000);
+   
+   if(OrderSend(request, result)) {
+      box.orderExecuted[index] = true;
+      box.ordersPlaced++;
+      box.totalLots += lotSize;
+      UpdateBoxInfoLabel(box.boxName);
+      Print("Trade executed: ", box.boxName, " Level ", index, 
+            " ", (box.isBuy?"Buy":"Sell"), " ", lotSize, " lots at ", price);
+   } else {
+      Print("OrderSend failed: ", GetLastError());
+   }
+}
+
+double CalculateRisk(double lotSize, bool isBuy) {
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double stopLossPoints = POINTS_OFFSET * 2; // Assuming SL is at opposite side of box
+   return lotSize * stopLossPoints * tickValue;
+}
+
+void UpdateBoxInfoLabel(string boxName) {
+   int index = FindBoxIndex(boxName);
+   if(index == -1) return;
+   
+   string infoText = StringFormat("Orders: %d Lots: %.2f", boxes[index].ordersPlaced, boxes[index].totalLots);
+   ObjectSetString(0, boxName+"_info", OBJPROP_TEXT, infoText);
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Event Handling                                                   |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam) {
+   if(id == CHARTEVENT_OBJECT_CLICK) HandleButtonClick(sparam);
+   if(id == CHARTEVENT_OBJECT_DRAG) HandleBoxDrag(sparam);
+}
+
+void HandleButtonClick(string sparam) {
+   if(sparam == "BuyButton") {
+      CreateBuyBox();
+   }
+   else if(sparam == "SellButton") {
+      CreateSellBox();
+   }
+   else if(sparam == "CloseAllBtn") {
+      CloseAllBoxes();
+   }
+   else if(StringFind(sparam, "_toggle") != -1) {
+      ToggleBoxEnabled(sparam);
+   }
+   else if(StringFind(sparam, "_close") != -1) {
+      CloseSingleBox(sparam);
+   }
+   else if(StringFind(sparam, "_settings") != -1) {
+      ShowSettingsPanel(sparam);
+   }
+   else if(StringFind(sparam, "_apply") != -1) {
+      ApplySettings(sparam);
+   }
+   else if(StringFind(sparam, "_cancel") != -1) {
+      string panelName = StringSubstr(sparam, 0, StringLen(sparam)-7);
+      ObjectsDeleteAll(0, panelName);
+      ChartRedraw();
+   }
+}
+
+void ToggleBoxEnabled(string toggleBtnName) {
+   string boxName = StringSubstr(toggleBtnName, 0, StringLen(toggleBtnName)-7);
+   int index = FindBoxIndex(boxName);
+   if(index != -1) {
+      boxes[index].boxEnabled = !boxes[index].boxEnabled;
+      ObjectSetString(0, toggleBtnName, OBJPROP_TEXT, boxes[index].boxEnabled ? "⏻" : "⏻");
+      ObjectSetInteger(0, toggleBtnName, OBJPROP_COLOR, boxes[index].boxEnabled ? clrLime : clrRed);
+      ChartRedraw();
+   }
+}
+
+void CloseSingleBox(string closeBtnName) {
+   string boxName = StringSubstr(closeBtnName, 0, StringLen(closeBtnName)-6);
+   CloseAllOrdersForBox(boxName);
+   ObjectDelete(0, boxName);
+   ObjectDelete(0, boxName+"_toggle");
+   ObjectDelete(0, boxName+"_settings");
+   ObjectDelete(0, boxName+"_close");
+   ObjectDelete(0, boxName+"_info");
+   RemoveBoxFromArray(boxName);
+   ChartRedraw();
+}
+
+void CloseAllBoxes() {
+   for(int i=ArraySize(boxes)-1; i>=0; i--) {
+      CloseAllOrdersForBox(boxes[i].boxName);
+      ObjectDelete(0, boxes[i].boxName);
+      ObjectDelete(0, boxes[i].boxName+"_toggle");
+      ObjectDelete(0, boxes[i].boxName+"_settings");
+      ObjectDelete(0, boxes[i].boxName+"_close");
+      ObjectDelete(0, boxes[i].boxName+"_info");
+   }
+   ArrayResize(boxes, 0);
+   ChartRedraw();
+}
+
+void CloseAllOrdersForBox(string boxName) {
+   int boxMagic = magicNumber + (StringFind(boxName, "BuyBox_") != -1 ? 1000 : 2000);
+   
+   for(int i=PositionsTotal()-1; i>=0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket > 0) {
+         string symbol = PositionGetString(POSITION_SYMBOL);
+         long magic = PositionGetInteger(POSITION_MAGIC);
+         if(symbol == _Symbol && magic == boxMagic) {
+            trade.PositionClose(ticket);
+         }
+      }
+   }
+}
+
+void HandleBoxDrag(string sparam) {
+   if(StringFind(sparam, "BuyBox_") == 0 || StringFind(sparam, "SellBox_") == 0) {
+      int index = FindBoxIndex(sparam);
+      if(index != -1) {
+         ObjectGetDouble(0, sparam, OBJPROP_PRICE, 0, boxes[index].upperPrice);
+         ObjectGetDouble(0, sparam, OBJPROP_PRICE, 1, boxes[index].lowerPrice);
+         datetime time1, time2;
+         ObjectGetInteger(0, sparam, OBJPROP_TIME, 0, time1);
+         ObjectGetInteger(0, sparam, OBJPROP_TIME, 1, time2);
+         boxes[index].startTime = time1;
+         boxes[index].endTime = time2;
+         
+         if(boxes[index].isBuy) {
+            UpdateBuyOrderLevels(boxes[index]);
+         } else {
+            UpdateSellOrderLevels(boxes[index]);
+         }
+         
+         CreateBoxControls(boxes[index].boxName, boxes[index].endTime, boxes[index].lowerPrice);
+      }
+   }
+}
+
+int FindBoxIndex(string boxName) {
+   for(int i = 0; i < ArraySize(boxes); i++) {
+      if(boxes[i].boxName == boxName)
+         return i;
+   }
+   return -1;
+}
+
+void RemoveBoxFromArray(string boxName) {
+   int index = FindBoxIndex(boxName);
+   if(index == -1) return;
+   
+   for(int i = index; i < ArraySize(boxes)-1; i++) {
+      boxes[i] = boxes[i+1];
+   }
+   ArrayResize(boxes, ArraySize(boxes)-1);
+}
+
+void ShowSettingsPanel(string settingsButtonName) {
+   string boxName = StringSubstr(settingsButtonName, 0, StringLen(settingsButtonName)-9);
+   int index = FindBoxIndex(boxName);
+   if(index == -1) return;
+
+   string panelName = "Settings_"+boxName;
+   ObjectsDeleteAll(0, panelName);
+
+   int iconX = (int)ObjectGetInteger(0, boxName+"_settings", OBJPROP_XDISTANCE);
+   int iconY = (int)ObjectGetInteger(0, boxName+"_settings", OBJPROP_YDISTANCE);
+
+   int panelWidth = 220;
+   int panelHeight = 180;
+   int panelX = iconX - 180;
+   int panelY = iconY - 185;
+
+   if(!boxes[index].isBuy) {
+      panelX = iconX - panelWidth + 30;
+   }
+
+   ObjectCreate(0, panelName+"_bg", OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, panelName+"_bg", OBJPROP_XDISTANCE, panelX);
+   ObjectSetInteger(0, panelName+"_bg", OBJPROP_YDISTANCE, panelY);
+   ObjectSetInteger(0, panelName+"_bg", OBJPROP_XSIZE, panelWidth);
+   ObjectSetInteger(0, panelName+"_bg", OBJPROP_YSIZE, panelHeight);
+   ObjectSetInteger(0, panelName+"_bg", OBJPROP_BGCOLOR, clrWhiteSmoke);
+   ObjectSetInteger(0, panelName+"_bg", OBJPROP_BORDER_COLOR, clrSilver);
+
+   ObjectCreate(0, panelName+"_title", OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, panelName+"_title", OBJPROP_XDISTANCE, panelX+10);
+   ObjectSetInteger(0, panelName+"_title", OBJPROP_YDISTANCE, panelY+10);
+   ObjectSetString(0, panelName+"_title", OBJPROP_TEXT, boxes[index].isBuy ? "BUY BOX SETTINGS" : "SELL BOX SETTINGS");
+   ObjectSetInteger(0, panelName+"_title", OBJPROP_COLOR, clrBlack);
+
+   int yOffset = panelY + 40;
+   CreateNumberInput(panelName+"_orders", panelX + (panelWidth-200)/2, yOffset, "Total Orders:", boxes[index].totalOrders);
+   
+   yOffset += 30;
+   CreateNumberInput(panelName+"_lot", panelX + (panelWidth-200)/2, yOffset, "Initial Lot:", boxes[index].initialLot, 2);
+   
+   yOffset += 30;
+   CreateNumberInput(panelName+"_step", panelX + (panelWidth-200)/2, yOffset, "Lot Step:", boxes[index].lotStep, 2);
+   
+   yOffset += 40;
+   CreateButton(panelName+"_apply", panelX+20, yOffset, 80, 25, "APPLY", clrGreen);
+   CreateButton(panelName+"_cancel", panelX+120, yOffset, 80, 25, "CANCEL", clrRed);
+
+   ChartRedraw();
+}
+
+void CreateNumberInput(string name, int x, int y, string label, double value, int digits=0) {
+   ObjectCreate(0, name+"_lbl", OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name+"_lbl", OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name+"_lbl", OBJPROP_YDISTANCE, y);
+   ObjectSetString(0, name+"_lbl", OBJPROP_TEXT, label);
+   ObjectSetInteger(0, name+"_lbl", OBJPROP_COLOR, clrBlack);
+
+   ObjectCreate(0, name, OBJ_EDIT, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x + 120);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, 80);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, 20);
+   ObjectSetString(0, name, OBJPROP_TEXT, DoubleToString(value, digits));
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clrBlack);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, clrWhite);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, clrSilver);
+   ObjectSetInteger(0, name, OBJPROP_ALIGN, ALIGN_CENTER);
+}
+
+void ApplySettings(string sparam) {
+   string panelName = StringSubstr(sparam, 0, StringLen(sparam)-6);
+   string boxName = StringSubstr(panelName, 9);
+   int index = FindBoxIndex(boxName);
+   
+   if(index != -1) {
+      boxes[index].totalOrders = (int)StringToInteger(ObjectGetString(0, panelName+"_orders", OBJPROP_TEXT));
+      boxes[index].initialLot = StringToDouble(ObjectGetString(0, panelName+"_lot", OBJPROP_TEXT));
+      boxes[index].lotStep = StringToDouble(ObjectGetString(0, panelName+"_step", OBJPROP_TEXT));
+      
+      if(boxes[index].isBuy) {
+         UpdateBuyOrderLevels(boxes[index]);
+      } else {
+         UpdateSellOrderLevels(boxes[index]);
+      }
+      
+      ObjectsDeleteAll(0, panelName);
+      ChartRedraw();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Cleanup                                                          |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason) {
+   ObjectsDeleteAll(0, -1, -1);
+   EventKillTimer();
+}
